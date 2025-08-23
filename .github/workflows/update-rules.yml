@@ -1,10 +1,8 @@
 name: Update and Compile Singbox Ruleset
 
 on:
-  # 设定每天凌晨 00:00 UTC (北京时间早上 8:00) 运行一次
   schedule:
     - cron: '0 0 * * *'
-  # 也可以手动触发，方便测试
   workflow_dispatch:
 
 jobs:
@@ -14,40 +12,24 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          # 拉取完整的历史记录，以便进行提交操作
           fetch-depth: 0
 
       - name: Download and compile ruleset
-        id: compile
         run: |
-          # 1. 下载 sing-box 预编译二进制文件
-          # 已更新为最新版本 v1.12.3
           wget "https://github.com/SagerNet/sing-box/releases/download/v1.12.3/sing-box-1.12.3-linux-amd64.tar.gz"
           tar -xzf sing-box-1.12.3-linux-amd64.tar.gz
           mv sing-box-*/sing-box ./sing-box
           chmod +x ./sing-box
-          
-          # 2. 检查 sing-box 是否下载成功
-          if [ ! -f "./sing-box" ]; then
-            echo "Error: sing-box binary not found!"
-            exit 1
-          fi
-
-          # 3. 下载远程的 JSON 规则集文件
           wget "https://raw.githubusercontent.com/TG-Twilight/AWAvenue-Ads-Rule/main/Filters/AWAvenue-Ads-Rule-Singbox.json" -O AWAvenue-Ads-Rule-Singbox.json
-          
-          # 4. 编译成二进制格式 .srs 文件
           ./sing-box rule-set compile --output AWAvenue-Ads-Rule-Singbox.srs AWAvenue-Ads-Rule-Singbox.json
-          
+
       - name: Check for changes
         id: git-check
         run: |
           git add AWAvenue-Ads-Rule-Singbox.srs
-          # 检查文件是否有更改，如果不同则设置一个输出
           git diff --quiet --exit-code || echo "changes=true" >> $GITHUB_OUTPUT
-      
+
       - name: Commit and push if there are changes
-        # 只有当上一步检测到文件有更改时才执行
         if: steps.git-check.outputs.changes == 'true'
         run: |
           git config --global user.name "GitHub Actions Bot"
