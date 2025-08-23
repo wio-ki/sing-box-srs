@@ -1,12 +1,15 @@
 name: Update and Compile Singbox Ruleset
+
 on:
   schedule:
-    - cron: '0 0 * * *'  # 修正了 cron 表达式
+    - cron: '0 0 * * *'
   workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write # 添加此行，以获得向仓库写入文件的权限
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -15,7 +18,7 @@ jobs:
 
       - name: Download and compile ruleset
         run: |
-          set -e  # 遇到错误立即退出
+          set -e
           
           echo "=== Current working directory ==="
           pwd
@@ -41,7 +44,6 @@ jobs:
           echo "=== Testing JSON syntax ==="
           head -20 AWAvenue-Ads-Rule-Singbox.json
           
-          # 验证 JSON 格式
           if command -v jq >/dev/null 2>&1; then
             echo "=== Validating JSON format ==="
             jq . AWAvenue-Ads-Rule-Singbox.json > /dev/null && echo "JSON format is valid" || echo "JSON format is invalid"
@@ -50,7 +52,6 @@ jobs:
           echo "=== Compiling ruleset ==="
           echo "Running command: ./sing-box rule-set compile --output AWAvenue-Ads-Rule-Singbox.srs AWAvenue-Ads-Rule-Singbox.json"
           
-          # 尝试编译并捕获详细错误信息
           if ./sing-box rule-set compile --output AWAvenue-Ads-Rule-Singbox.srs AWAvenue-Ads-Rule-Singbox.json; then
             echo "Compilation successful!"
           else
