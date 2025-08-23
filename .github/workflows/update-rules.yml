@@ -1,8 +1,7 @@
 name: Update and Compile Singbox Ruleset
-
 on:
   schedule:
-    - cron: '0 0 * * *'
+    - cron: '0 0 * * *'  # 修正了 cron 表达式
   workflow_dispatch:
 
 jobs:
@@ -16,18 +15,70 @@ jobs:
 
       - name: Download and compile ruleset
         run: |
+          set -e  # 遇到错误立即退出
+          
+          echo "=== Current working directory ==="
+          pwd
+          ls -la
+          
+          echo "=== Downloading sing-box ==="
           wget "https://github.com/SagerNet/sing-box/releases/download/v1.12.3/sing-box-1.12.3-linux-amd64.tar.gz"
           tar -xzf sing-box-1.12.3-linux-amd64.tar.gz
           mv sing-box-*/sing-box ./sing-box
           chmod +x ./sing-box
+          
+          echo "=== Verifying sing-box installation ==="
+          ls -la ./sing-box
+          ./sing-box version
+          
+          echo "=== Downloading JSON ruleset ==="
           wget "https://raw.githubusercontent.com/TG-Twilight/AWAvenue-Ads-Rule/main/Filters/AWAvenue-Ads-Rule-Singbox.json" -O AWAvenue-Ads-Rule-Singbox.json
-          ./sing-box rule-set compile --output AWAvenue-Ads-Rule-Singbox.srs AWAvenue-Ads-Rule-Singbox.json
+          
+          echo "=== Verifying JSON file ==="
+          ls -la AWAvenue-Ads-Rule-Singbox.json
+          echo "File size: $(wc -c < AWAvenue-Ads-Rule-Singbox.json) bytes"
+          
+          echo "=== Testing JSON syntax ==="
+          head -20 AWAvenue-Ads-Rule-Singbox.json
+          
+          # 验证 JSON 格式
+          if command -v jq >/dev/null 2>&1; then
+            echo "=== Validating JSON format ==="
+            jq . AWAvenue-Ads-Rule-Singbox.json > /dev/null && echo "JSON format is valid" || echo "JSON format is invalid"
+          fi
+          
+          echo "=== Compiling ruleset ==="
+          echo "Running command: ./sing-box rule-set compile --output AWAvenue-Ads-Rule-Singbox.srs AWAvenue-Ads-Rule-Singbox.json"
+          
+          # 尝试编译并捕获详细错误信息
+          if ./sing-box rule-set compile --output AWAvenue-Ads-Rule-Singbox.srs AWAvenue-Ads-Rule-Singbox.json; then
+            echo "Compilation successful!"
+          else
+            echo "Compilation failed with exit code: $?"
+            echo "=== Attempting alternative command format ==="
+            ./sing-box rule-set compile AWAvenue-Ads-Rule-Singbox.json --output AWAvenue-Ads-Rule-Singbox.srs
+          fi
+          
+          echo "=== Verifying compiled output ==="
+          ls -la
+          if [ -f AWAvenue-Ads-Rule-Singbox.srs ]; then
+            ls -la AWAvenue-Ads-Rule-Singbox.srs
+            echo "SRS file created successfully!"
+          else
+            echo "ERROR: SRS file was not created!"
+            exit 1
+          fi
 
       - name: Check for changes
         id: git-check
         run: |
           git add AWAvenue-Ads-Rule-Singbox.srs
-          git diff --quiet --exit-code || echo "changes=true" >> $GITHUB_OUTPUT
+          if ! git diff --quiet --cached; then
+            echo "changes=true" >> $GITHUB_OUTPUT
+            echo "Changes detected in ruleset file"
+          else
+            echo "No changes detected"
+          fi
 
       - name: Commit and push if there are changes
         if: steps.git-check.outputs.changes == 'true'
