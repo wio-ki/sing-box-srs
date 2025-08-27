@@ -9,82 +9,54 @@ jobs:
   build:
     runs-on: ubuntu-latest
     permissions:
-      contents: write # 添加此行，以获得向仓库写入文件的权限
+      contents: write
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Download and compile ruleset
+      - name: Check for ruleset update
+        id: check-update
         run: |
-          set -e
-          
-          echo "=== Current working directory ==="
-          pwd
-          ls -la
-          
-          echo "=== Downloading sing-box ==="
+          # 使用 curl 的 -sILf 命令获取远程文件的 Last-Modified 和 Content-Length
+          REMOTE_INFO=$(curl -sILf "https://raw.githubusercontent.com/TG-Twilight/AWAvenue-Ads-Rule/main/Filters/AWAvenue-Ads-Rule-Singbox.json")
+          REMOTE_LAST_MODIFIED=$(echo "$REMOTE_INFO" | grep -i "Last-Modified" | awk '{print $NF}')
+          REMOTE_CONTENT_LENGTH=$(echo "$REMOTE_INFO" | grep -i "Content-Length" | awk '{print $NF}')
+
+          # 如果本地文件不存在，或者远程文件比本地文件新，则需要更新
+          if [ ! -f "AWAvenue-Ads-Rule-Singbox.json" ] || \
+             [ "$(date -d "$REMOTE_LAST_MODIFIED" +%s)" -gt "$(date -r "AWAvenue-Ads-Rule-Singbox.json" +%s)" ] || \
+             [ "$REMOTE_CONTENT_LENGTH" -ne "$(stat -c%s "AWAvenue-Ads-Rule-Singbox.json" || echo 0)" ]; then
+            echo "::notice::Ruleset has been updated. Proceeding with compilation."
+            echo "is_updated=true" >> $GITHUB_OUTPUT
+          else
+            echo "::notice::Ruleset is already up-to-date. Skipping compilation."
+            echo "is_updated=false" >> $GITHUB_OUTPUT
+          fi
+      
+      - name: Download and compile ruleset
+        # 只有在规则集有更新时才执行此步骤
+        if: steps.check-update.outputs.is_updated == 'true'
+        run: |
+          # 下载 sing-box 预编译二进制文件
           wget "https://github.com/SagerNet/sing-box/releases/download/v1.12.3/sing-box-1.12.3-linux-amd64.tar.gz"
           tar -xzf sing-box-1.12.3-linux-amd64.tar.gz
           mv sing-box-*/sing-box ./sing-box
           chmod +x ./sing-box
           
-          echo "=== Verifying sing-box installation ==="
-          ls -la ./sing-box
-          ./sing-box version
-          
-          echo "=== Downloading JSON ruleset ==="
+          # 下载最新的 JSON 规则集文件
           wget "https://raw.githubusercontent.com/TG-Twilight/AWAvenue-Ads-Rule/main/Filters/AWAvenue-Ads-Rule-Singbox.json" -O AWAvenue-Ads-Rule-Singbox.json
           
-          echo "=== Verifying JSON file ==="
-          ls -la AWAvenue-Ads-Rule-Singbox.json
-          echo "File size: $(wc -c < AWAvenue-Ads-Rule-Singbox.json) bytes"
-          
-          echo "=== Testing JSON syntax ==="
-          head -20 AWAvenue-Ads-Rule-Singbox.json
-          
-          if command -v jq >/dev/null 2>&1; then
-            echo "=== Validating JSON format ==="
-            jq . AWAvenue-Ads-Rule-Singbox.json > /dev/null && echo "JSON format is valid" || echo "JSON format is invalid"
-          fi
-          
-          echo "=== Compiling ruleset ==="
-          echo "Running command: ./sing-box rule-set compile --output AWAvenue-Ads-Rule-Singbox.srs AWAvenue-Ads-Rule-Singbox.json"
-          
-          if ./sing-box rule-set compile --output AWAvenue-Ads-Rule-Singbox.srs AWAvenue-Ads-Rule-Singbox.json; then
-            echo "Compilation successful!"
-          else
-            echo "Compilation failed with exit code: $?"
-            echo "=== Attempting alternative command format ==="
-            ./sing-box rule-set compile AWAvenue-Ads-Rule-Singbox.json --output AWAvenue-Ads-Rule-Singbox.srs
-          fi
-          
-          echo "=== Verifying compiled output ==="
-          ls -la
-          if [ -f AWAvenue-Ads-Rule-Singbox.srs ]; then
-            ls -la AWAvenue-Ads-Rule-Singbox.srs
-            echo "SRS file created successfully!"
-          else
-            echo "ERROR: SRS file was not created!"
-            exit 1
-          fi
-
-      - name: Check for changes
-        id: git-check
-        run: |
-          git add AWAvenue-Ads-Rule-Singbox.srs
-          if ! git diff --quiet --cached; then
-            echo "changes=true" >> $GITHUB_OUTPUT
-            echo "Changes detected in ruleset file"
-          else
-            echo "No changes detected"
-          fi
-
-      - name: Commit and push if there are changes
-        if: steps.git-check.outputs.changes == 'true'
+          # 编译成二进制格式 .srs 文件
+          ./sing-box rule-set compile --output AWAvenue-Ads-Rule-Singbox.srs AWAvenue-Ads-Rule-Singbox.json
+      
+      - name: Commit and push changes
+        # 只有在规则集有更新时才执行此步骤
+        if: steps.check-update.outputs.is_updated == 'true'
         run: |
           git config --global user.name "GitHub Actions Bot"
           git config --global user.email "actions@github.com"
+          git add AWAvenue-Ads-Rule-Singbox.srs
           git commit -m "feat(ruleset): Update and compile AWAvenue-Ads-Rule-Singbox.srs"
           git push
