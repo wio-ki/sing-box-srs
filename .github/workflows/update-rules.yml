@@ -1,90 +1,212 @@
 name: Update and Compile Singbox Ruleset
-
 on:
   schedule:
-    - cron: '0 0 * * *'
-  workflow_dispatch:
+    - cron: '0 0 * * *'  # 修正：每天午夜运行（之前的 '0 0 * **' 是错误语法）
+  workflow_dispatch:      # 允许手动触发
+  
+env:
+  SINGBOX_VERSION: "1.12.3"
+  RULESET_URL: "https://raw.githubusercontent.com/TG-Twilight/AWAvenue-Ads-Rule/main/Filters/AWAvenue-Ads-Rule-Singbox.json"
+  RULESET_FILE: "AWAvenue-Ads-Rule-Singbox.json"
+  COMPILED_FILE: "AWAvenue-Ads-Rule-Singbox.srs"
 
 jobs:
   build:
     runs-on: ubuntu-latest
     permissions:
-      contents: write # 添加此行，以获得向仓库写入文件的权限
+      contents: write    # 获得向仓库写入文件的权限
+    
+    outputs:
+      json-updated: ${{ steps.check-json-update.outputs.updated }}
+      srs-updated: ${{ steps.check-srs-changes.outputs.changes }}
+    
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
-
-      - name: Download and compile ruleset
+          fetch-depth: 0   # 获取完整历史，用于比较文件变化
+      
+      # 步骤1: 检查远程JSON文件是否有更新
+      - name: Check if remote JSON has updates
+        id: check-json-update
         run: |
-          set -e
+          echo "=== 检查远程JSON文件更新 ==="
           
-          echo "=== Current working directory ==="
-          pwd
-          ls -la
+          # 下载远程JSON文件
+          wget "${{ env.RULESET_URL }}" -O remote_${{ env.RULESET_FILE }}
           
-          echo "=== Downloading sing-box ==="
-          wget "https://github.com/SagerNet/sing-box/releases/download/v1.12.3/sing-box-1.12.3-linux-amd64.tar.gz"
-          tar -xzf sing-box-1.12.3-linux-amd64.tar.gz
-          mv sing-box-*/sing-box ./sing-box
+          # 检查本地是否存在旧的JSON文件
+          if [ -f "${{ env.RULESET_FILE }}" ]; then
+            echo "本地JSON文件存在，比较差异..."
+            if cmp -s "${{ env.RULESET_FILE }}" "remote_${{ env.RULESET_FILE }}"; then
+              echo "JSON文件无变化"
+              echo "updated=false" >> $GITHUB_OUTPUT
+            else
+              echo "JSON文件有更新"
+              echo "updated=true" >> $GITHUB_OUTPUT
+              # 更新本地JSON文件
+              mv "remote_${{ env.RULESET_FILE }}" "${{ env.RULESET_FILE }}"
+            fi
+          else
+            echo "本地JSON文件不存在，使用远程文件"
+            echo "updated=true" >> $GITHUB_OUTPUT
+            mv "remote_${{ env.RULESET_FILE }}" "${{ env.RULESET_FILE }}"
+          fi
+          
+          # 清理临时文件
+          rm -f "remote_${{ env.RULESET_FILE }}"
+      
+      # 步骤2: 验证JSON文件格式（只在有更新时执行）
+      - name: Validate JSON format
+        if: steps.check-json-update.outputs.updated == 'true'
+        run: |
+          echo "=== 验证JSON文件格式 ==="
+          
+          # 检查文件是否存在且不为空
+          if [ ! -f "${{ env.RULESET_FILE }}" ] || [ ! -s "${{ env.RULESET_FILE }}" ]; then
+            echo "错误: JSON文件不存在或为空"
+            exit 1
+          fi
+          
+          echo "文件大小: $(wc -c < ${{ env.RULESET_FILE }}) 字节"
+          echo "文件行数: $(wc -l < ${{ env.RULESET_FILE }}) 行"
+          
+          # 验证JSON格式
+          if command -v jq >/dev/null 2>&1; then
+            if jq empty "${{ env.RULESET_FILE }}"; then
+              echo "✅ JSON格式验证通过"
+            else
+              echo "❌ JSON格式验证失败"
+              exit 1
+            fi
+          else
+            echo "⚠️ jq未安装，跳过JSON格式验证"
+          fi
+          
+          # 显示文件前几行用于调试
+          echo "=== JSON文件内容预览 ==="
+          head -10 "${{ env.RULESET_FILE }}"
+      
+      # 步骤3: 下载并设置sing-box工具（只在JSON有更新时执行）
+      - name: Setup sing-box
+        if: steps.check-json-update.outputs.updated == 'true'
+        run: |
+          echo "=== 下载并设置sing-box工具 ==="
+          
+          # 下载sing-box
+          SINGBOX_URL="https://github.com/SagerNet/sing-box/releases/download/v${{ env.SINGBOX_VERSION }}/sing-box-${{ env.SINGBOX_VERSION }}-linux-amd64.tar.gz"
+          echo "下载地址: $SINGBOX_URL"
+          
+          wget "$SINGBOX_URL" -O singbox.tar.gz
+          
+          # 解压并设置权限
+          tar -xzf singbox.tar.gz
+          find . -name "sing-box" -type f -exec mv {} ./sing-box \;
           chmod +x ./sing-box
           
-          echo "=== Verifying sing-box installation ==="
+          # 验证安装
+          echo "=== 验证sing-box安装 ==="
           ls -la ./sing-box
           ./sing-box version
           
-          echo "=== Downloading JSON ruleset ==="
-          wget "https://raw.githubusercontent.com/TG-Twilight/AWAvenue-Ads-Rule/main/Filters/AWAvenue-Ads-Rule-Singbox.json" -O AWAvenue-Ads-Rule-Singbox.json
+          # 清理下载文件
+          rm -f singbox.tar.gz
+          rm -rf sing-box-*/
+      
+      # 步骤4: 编译规则集（只在JSON有更新时执行）
+      - name: Compile ruleset
+        if: steps.check-json-update.outputs.updated == 'true'
+        run: |
+          echo "=== 编译规则集 ==="
           
-          echo "=== Verifying JSON file ==="
-          ls -la AWAvenue-Ads-Rule-Singbox.json
-          echo "File size: $(wc -c < AWAvenue-Ads-Rule-Singbox.json) bytes"
+          # 编译规则集
+          echo "执行命令: ./sing-box rule-set compile --output ${{ env.COMPILED_FILE }} ${{ env.RULESET_FILE }}"
           
-          echo "=== Testing JSON syntax ==="
-          head -20 AWAvenue-Ads-Rule-Singbox.json
-          
-          if command -v jq >/dev/null 2>&1; then
-            echo "=== Validating JSON format ==="
-            jq . AWAvenue-Ads-Rule-Singbox.json > /dev/null && echo "JSON format is valid" || echo "JSON format is invalid"
+          if ./sing-box rule-set compile --output "${{ env.COMPILED_FILE }}" "${{ env.RULESET_FILE }}"; then
+            echo "✅ 编译成功!"
+          else
+            echo "❌ 编译失败，尝试备用命令格式..."
+            if ./sing-box rule-set compile "${{ env.RULESET_FILE }}" --output "${{ env.COMPILED_FILE }}"; then
+              echo "✅ 备用命令编译成功!"
+            else
+              echo "❌ 所有编译尝试都失败了"
+              exit 1
+            fi
           fi
           
-          echo "=== Compiling ruleset ==="
-          echo "Running command: ./sing-box rule-set compile --output AWAvenue-Ads-Rule-Singbox.srs AWAvenue-Ads-Rule-Singbox.json"
-          
-          if ./sing-box rule-set compile --output AWAvenue-Ads-Rule-Singbox.srs AWAvenue-Ads-Rule-Singbox.json; then
-            echo "Compilation successful!"
+          # 验证编译输出
+          if [ -f "${{ env.COMPILED_FILE }}" ]; then
+            echo "=== 编译输出验证 ==="
+            ls -la "${{ env.COMPILED_FILE }}"
+            echo "SRS文件大小: $(wc -c < ${{ env.COMPILED_FILE }}) 字节"
+            echo "✅ SRS文件创建成功!"
           else
-            echo "Compilation failed with exit code: $?"
-            echo "=== Attempting alternative command format ==="
-            ./sing-box rule-set compile AWAvenue-Ads-Rule-Singbox.json --output AWAvenue-Ads-Rule-Singbox.srs
-          fi
-          
-          echo "=== Verifying compiled output ==="
-          ls -la
-          if [ -f AWAvenue-Ads-Rule-Singbox.srs ]; then
-            ls -la AWAvenue-Ads-Rule-Singbox.srs
-            echo "SRS file created successfully!"
-          else
-            echo "ERROR: SRS file was not created!"
+            echo "❌ 错误: SRS文件未被创建!"
             exit 1
           fi
-
-      - name: Check for changes
-        id: git-check
+      
+      # 步骤5: 检查编译后的文件是否有变化
+      - name: Check for SRS file changes
+        id: check-srs-changes
+        if: steps.check-json-update.outputs.updated == 'true'
         run: |
-          git add AWAvenue-Ads-Rule-Singbox.srs
-          if ! git diff --quiet --cached; then
-            echo "changes=true" >> $GITHUB_OUTPUT
-            echo "Changes detected in ruleset file"
+          echo "=== 检查SRS文件变化 ==="
+          
+          git add "${{ env.COMPILED_FILE }}"
+          
+          if git diff --quiet --cached; then
+            echo "SRS文件无变化"
+            echo "changes=false" >> $GITHUB_OUTPUT
           else
-            echo "No changes detected"
+            echo "SRS文件有变化"
+            echo "changes=true" >> $GITHUB_OUTPUT
+            
+            # 显示变化统计
+            echo "=== 变化统计 ==="
+            git diff --cached --stat
           fi
-
-      - name: Commit and push if there are changes
-        if: steps.git-check.outputs.changes == 'true'
+      
+      # 步骤6: 同时提交JSON和SRS文件（如果有变化）
+      - name: Commit and push changes
+        if: steps.check-json-update.outputs.updated == 'true' && (steps.check-srs-changes.outputs.changes == 'true' || steps.check-json-update.outputs.updated == 'true')
         run: |
+          echo "=== 提交文件变化 ==="
+          
+          # 配置Git用户信息
           git config --global user.name "GitHub Actions Bot"
           git config --global user.email "actions@github.com"
-          git commit -m "feat(ruleset): Update and compile AWAvenue-Ads-Rule-Singbox.srs"
+          
+          # 添加所有相关文件
+          git add "${{ env.RULESET_FILE }}" "${{ env.COMPILED_FILE }}"
+          
+          # 生成详细的提交信息
+          COMMIT_MSG="feat(ruleset): Update AWAvenue-Ads-Rule ruleset files
+          
+          - Updated JSON ruleset from upstream
+          - Recompiled SRS binary ruleset
+          - Timestamp: $(date -u '+%Y-%m-%d %H:%M:%S UTC')
+          - Sing-box version: ${{ env.SINGBOX_VERSION }}"
+          
+          # 提交并推送
+          git commit -m "$COMMIT_MSG"
           git push
+          
+          echo "✅ 文件已成功提交并推送到仓库"
+      
+      # 步骤7: 输出工作流程摘要
+      - name: Workflow Summary
+        if: always()
+        run: |
+          echo "=== 工作流程摘要 ==="
+          echo "JSON文件是否更新: ${{ steps.check-json-update.outputs.updated || 'N/A' }}"
+          echo "SRS文件是否有变化: ${{ steps.check-srs-changes.outputs.changes || 'N/A' }}"
+          
+          if [ "${{ steps.check-json-update.outputs.updated }}" == "true" ]; then
+            echo "✅ 工作流程执行完成 - 文件已更新"
+          else
+            echo "ℹ️ 工作流程执行完成 - 无需更新"
+          fi
+          
+          # 显示最终文件状态
+          echo "=== 最终文件状态 ==="
+          ls -la *.json *.srs 2>/dev/null || echo "未找到规则集文件"
