@@ -35,26 +35,44 @@ jobs:
           # 下载远程JSON文件
           wget "${{ env.RULESET_URL }}" -O remote_${{ env.RULESET_FILE }}
           
-          # 检查本地是否存在旧的JSON文件
-          if [ -f "${{ env.RULESET_FILE }}" ]; then
-            echo "本地JSON文件存在，比较差异..."
-            if cmp -s "${{ env.RULESET_FILE }}" "remote_${{ env.RULESET_FILE }}"; then
-              echo "JSON文件无变化"
+          # 获取远程文件的哈希值
+          REMOTE_HASH=$(sha256sum "remote_${{ env.RULESET_FILE }}" | cut -d' ' -f1)
+          echo "远程文件哈希: $REMOTE_HASH"
+          
+          # 检查是否存在上次的哈希记录
+          if [ -f ".last_json_hash" ]; then
+            LAST_HASH=$(cat .last_json_hash)
+            echo "上次记录哈希: $LAST_HASH"
+            
+            if [ "$REMOTE_HASH" = "$LAST_HASH" ]; then
+              echo "JSON文件无变化 (哈希相同)"
               echo "updated=false" >> $GITHUB_OUTPUT
+              # 清理临时文件
+              rm -f "remote_${{ env.RULESET_FILE }}"
             else
-              echo "JSON文件有更新"
+              echo "JSON文件有更新 (哈希不同)"
               echo "updated=true" >> $GITHUB_OUTPUT
-              # 更新本地JSON文件
+              # 更新JSON文件和哈希记录
               mv "remote_${{ env.RULESET_FILE }}" "${{ env.RULESET_FILE }}"
+              echo "$REMOTE_HASH" > .last_json_hash
             fi
           else
-            echo "本地JSON文件不存在，使用远程文件"
-            echo "updated=true" >> $GITHUB_OUTPUT
+            echo "首次运行或哈希记录不存在"
+            
+            # 检查是否存在SRS文件来判断这是否真的是首次运行
+            if [ -f "${{ env.COMPILED_FILE }}" ]; then
+              echo "发现现有SRS文件，可能是首次运行但有历史数据"
+              echo "将当前远程文件作为基准，标记为需要更新"
+              echo "updated=true" >> $GITHUB_OUTPUT
+            else
+              echo "真正的首次运行"
+              echo "updated=true" >> $GITHUB_OUTPUT
+            fi
+            
+            # 保存当前文件和哈希
             mv "remote_${{ env.RULESET_FILE }}" "${{ env.RULESET_FILE }}"
+            echo "$REMOTE_HASH" > .last_json_hash
           fi
-          
-          # 清理临时文件
-          rm -f "remote_${{ env.RULESET_FILE }}"
       
       # 步骤2: 验证JSON文件格式（只在有更新时执行）
       - name: Validate JSON format
@@ -166,9 +184,9 @@ jobs:
             git diff --cached --stat
           fi
       
-      # 步骤6: 同时提交JSON和SRS文件（如果有变化）
+      # 步骤6: 提交文件（包括哈希记录文件）
       - name: Commit and push changes
-        if: steps.check-json-update.outputs.updated == 'true' && (steps.check-srs-changes.outputs.changes == 'true' || steps.check-json-update.outputs.updated == 'true')
+        if: steps.check-json-update.outputs.updated == 'true'
         run: |
           echo "=== 提交文件变化 ==="
           
@@ -176,14 +194,21 @@ jobs:
           git config --global user.name "GitHub Actions Bot"
           git config --global user.email "actions@github.com"
           
-          # 添加所有相关文件
-          git add "${{ env.RULESET_FILE }}" "${{ env.COMPILED_FILE }}"
+          # 添加所有相关文件（包括哈希记录）
+          git add "${{ env.RULESET_FILE }}" "${{ env.COMPILED_FILE }}" ".last_json_hash"
+          
+          # 检查是否真的有文件变化
+          if git diff --quiet --cached; then
+            echo "实际上没有文件变化，跳过提交"
+            exit 0
+          fi
           
           # 生成详细的提交信息
           COMMIT_MSG="feat(ruleset): Update AWAvenue-Ads-Rule ruleset files
           
           - Updated JSON ruleset from upstream
           - Recompiled SRS binary ruleset
+          - Updated hash record for change detection
           - Timestamp: $(date -u '+%Y-%m-%d %H:%M:%S UTC')
           - Sing-box version: ${{ env.SINGBOX_VERSION }}"
           
