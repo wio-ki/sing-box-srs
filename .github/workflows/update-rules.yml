@@ -137,27 +137,53 @@ jobs:
         run: |
           echo "=== 编译规则集 ==="
           
+          # 删除旧的SRS文件（如果存在）
+          if [ -f "${{ env.COMPILED_FILE }}" ]; then
+            echo "删除旧的SRS文件"
+            rm -f "${{ env.COMPILED_FILE }}"
+          fi
+          
           # 编译规则集
           echo "执行命令: ./sing-box rule-set compile --output ${{ env.COMPILED_FILE }} ${{ env.RULESET_FILE }}"
           
+          COMPILE_SUCCESS=false
+          
           if ./sing-box rule-set compile --output "${{ env.COMPILED_FILE }}" "${{ env.RULESET_FILE }}"; then
             echo "✅ 编译成功!"
+            COMPILE_SUCCESS=true
           else
             echo "❌ 编译失败，尝试备用命令格式..."
             if ./sing-box rule-set compile "${{ env.RULESET_FILE }}" --output "${{ env.COMPILED_FILE }}"; then
               echo "✅ 备用命令编译成功!"
+              COMPILE_SUCCESS=true
             else
               echo "❌ 所有编译尝试都失败了"
+              # 显示详细错误信息
+              echo "=== 调试信息 ==="
+              echo "当前目录内容:"
+              ls -la
+              echo "sing-box版本:"
+              ./sing-box version
+              echo "JSON文件信息:"
+              ls -la "${{ env.RULESET_FILE }}"
+              head -5 "${{ env.RULESET_FILE }}"
               exit 1
             fi
           fi
           
           # 验证编译输出
-          if [ -f "${{ env.COMPILED_FILE }}" ]; then
+          if [ "$COMPILE_SUCCESS" = "true" ] && [ -f "${{ env.COMPILED_FILE }}" ]; then
             echo "=== 编译输出验证 ==="
             ls -la "${{ env.COMPILED_FILE }}"
-            echo "SRS文件大小: $(wc -c < ${{ env.COMPILED_FILE }}) 字节"
-            echo "✅ SRS文件创建成功!"
+            FILE_SIZE=$(wc -c < "${{ env.COMPILED_FILE }}")
+            echo "SRS文件大小: $FILE_SIZE 字节"
+            
+            if [ "$FILE_SIZE" -gt 0 ]; then
+              echo "✅ SRS文件创建成功!"
+            else
+              echo "❌ SRS文件为空!"
+              exit 1
+            fi
           else
             echo "❌ 错误: SRS文件未被创建!"
             exit 1
@@ -190,12 +216,45 @@ jobs:
         run: |
           echo "=== 提交文件变化 ==="
           
+          # 验证所有必要文件是否存在
+          echo "=== 验证文件存在性 ==="
+          MISSING_FILES=()
+          
+          if [ ! -f "${{ env.RULESET_FILE }}" ]; then
+            MISSING_FILES+=("${{ env.RULESET_FILE }}")
+          fi
+          
+          if [ ! -f "${{ env.COMPILED_FILE }}" ]; then
+            MISSING_FILES+=("${{ env.COMPILED_FILE }}")
+          fi
+          
+          if [ ! -f ".last_json_hash" ]; then
+            MISSING_FILES+=(".last_json_hash")
+          fi
+          
+          if [ ${#MISSING_FILES[@]} -gt 0 ]; then
+            echo "❌ 缺少必要文件: ${MISSING_FILES[*]}"
+            echo "当前目录内容:"
+            ls -la
+            exit 1
+          fi
+          
+          echo "✅ 所有必要文件都存在"
+          echo "JSON文件: $(ls -la ${{ env.RULESET_FILE }})"
+          echo "SRS文件: $(ls -la ${{ env.COMPILED_FILE }})"
+          echo "哈希文件: $(ls -la .last_json_hash)"
+          
           # 配置Git用户信息
           git config --global user.name "GitHub Actions Bot"
           git config --global user.email "actions@github.com"
           
           # 添加所有相关文件（包括哈希记录）
+          echo "=== 添加文件到Git ==="
           git add "${{ env.RULESET_FILE }}" "${{ env.COMPILED_FILE }}" ".last_json_hash"
+          
+          # 显示将要提交的文件
+          echo "=== 待提交文件 ==="
+          git status --porcelain
           
           # 检查是否真的有文件变化
           if git diff --quiet --cached; then
@@ -203,17 +262,26 @@ jobs:
             exit 0
           fi
           
+          # 显示文件变化详情
+          echo "=== 文件变化详情 ==="
+          git diff --cached --stat
+          
           # 生成详细的提交信息
           COMMIT_MSG="feat(ruleset): Update AWAvenue-Ads-Rule ruleset files
           
           - Updated JSON ruleset from upstream
           - Recompiled SRS binary ruleset
           - Updated hash record for change detection
+          - JSON size: $(wc -c < ${{ env.RULESET_FILE }}) bytes
+          - SRS size: $(wc -c < ${{ env.COMPILED_FILE }}) bytes
           - Timestamp: $(date -u '+%Y-%m-%d %H:%M:%S UTC')
           - Sing-box version: ${{ env.SINGBOX_VERSION }}"
           
           # 提交并推送
+          echo "=== 执行Git提交 ==="
           git commit -m "$COMMIT_MSG"
+          
+          echo "=== 推送到远程仓库 ==="
           git push
           
           echo "✅ 文件已成功提交并推送到仓库"
